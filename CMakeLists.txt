@@ -11,11 +11,19 @@ set(CMAKE_AUTOUIC ON)
 # Find Qt6
 find_package(Qt6 COMPONENTS Widgets REQUIRED)
 
+# Npcap SDK
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/third_party/Include)
+link_directories(${CMAKE_CURRENT_SOURCE_DIR}/third_party/Lib/x64)
+
 # Executable targets
 add_executable(WiresharkClone
     src/main.cpp
     src/MainWindow.cpp
     src/MainWindow.h
+    src/PacketCapture.cpp
+    src/PacketCapture.h
+    src/PacketData.h
 )
 
-target_link_libraries(WiresharkClone PRIVATE Qt6::Widgets)
+target_link_libraries(WiresharkClone PRIVATE Qt6::Widgets wpcap Packet ws2_32)
+

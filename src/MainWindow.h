@@ -3,6 +3,10 @@
 #include <QMainWindow>
 #include <QTableWidget>
 #include <QPushButton>
+#include <QComboBox>
+#include <QLabel>
+#include "PacketCapture.h"
+#include "PacketData.h"
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -14,6 +18,8 @@ public:
 private slots:
     void onStartCapture();
     void onStopCapture();
+    void onPacketCaptured(PacketData packet);
+    void onCaptureError(const QString &errorMsg);
 
 private:
     void setupUi();
@@ -21,4 +27,8 @@ private:
     QTableWidget *packetTable;
     QPushButton *startBtn;
     QPushButton *stopBtn;
+    QComboBox *interfaceCombo;
+    QLabel *statusLabel;
+
+    PacketCapture *captureEngine;
 };
