@@ -1,0 +1,14 @@
+# Build directories
+build/
+cmake-build-debug/
+cmake-build-release/
+
+# Qt specific
+*.user
+*.pro.user
+
+# Object files and executables
+*.exe
+*.o
+*.obj
+*.dll
