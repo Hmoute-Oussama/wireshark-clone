@@ -21,6 +21,12 @@ add_executable(WiresharkClone
     src/PacketCapture.cpp
     src/PacketCapture.h
     src/PacketData.h
+    src/services/capture_service.cpp
+    src/services/capture_service.hpp
+    src/services/filter_service.cpp
+    src/services/filter_service.hpp
+    src/services/database_service.cpp
+    src/services/database_service.hpp
 )
 
 target_link_libraries(WiresharkClone
