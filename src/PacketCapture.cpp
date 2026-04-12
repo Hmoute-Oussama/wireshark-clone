@@ -3,9 +3,6 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Wire-format header structs  (packed so sizeof() matches on-wire sizes)
-// ─────────────────────────────────────────────────────────────────────────────
 #pragma pack(push, 1)
 
 struct EthernetHeader {
@@ -32,8 +29,8 @@ struct TcpHeader {
     uint16_t dstPort;
     uint32_t seqNum;
     uint32_t ackNum;
-    uint8_t  dataOffset;   // high nibble = header length in 32-bit words
-    uint8_t  flags;        // bits 5-0: URG ACK PSH RST SYN FIN
+    uint8_t  dataOffset;
+    uint8_t  flags;
     uint16_t windowSize;
     uint16_t checksum;
     uint16_t urgentPtr;
@@ -54,10 +51,6 @@ struct IcmpHeader {
 
 #pragma pack(pop)
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
 static QString formatMac(const uint8_t *m) {
     return QString("%1:%2:%3:%4:%5:%6")
         .arg(m[0], 2, 16, QChar('0'))
@@ -75,10 +68,6 @@ static QString ipToStr(uint32_t addr) {
     inet_ntop(AF_INET, &a, buf, INET_ADDRSTRLEN);
     return QString(buf);
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  PacketCapture implementation
-// ─────────────────────────────────────────────────────────────────────────────
 
 PacketCapture::PacketCapture(QObject *parent) : QThread(parent) {}
 
@@ -111,6 +100,15 @@ void PacketCapture::startCapture(const QString &deviceName) {
     selectedDevice = deviceName;
     packetCount    = 0;
     capturing      = true;
+    isOffline      = false;
+    start();
+}
+
+void PacketCapture::openPcap(const QString &fileName) {
+    pcapFileName = fileName;
+    packetCount  = 0;
+    capturing    = true;
+    isOffline    = true;
     start();
 }
 
@@ -120,19 +118,19 @@ void PacketCapture::stopCapture() {
         pcap_breakloop(handle);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Capture loop
-// ─────────────────────────────────────────────────────────────────────────────
-
 void PacketCapture::run() {
     char errBuf[PCAP_ERRBUF_SIZE];
 
-    handle = pcap_open_live(
-        selectedDevice.toLocal8Bit().constData(),
-        65536, 1, 1000, errBuf);
+    if (isOffline) {
+        handle = pcap_open_offline(pcapFileName.toLocal8Bit().constData(), errBuf);
+    } else {
+        handle = pcap_open_live(
+            selectedDevice.toLocal8Bit().constData(),
+            65536, 1, 1000, errBuf);
+    }
 
     if (!handle) {
-        emit captureError(QString("Failed to open device: %1").arg(errBuf));
+        emit captureError(QString("Failed to open source: %1").arg(errBuf));
         return;
     }
 
@@ -149,13 +147,13 @@ void PacketCapture::run() {
             pkt.rawData = QByteArray(reinterpret_cast<const char*>(data),
                                      static_cast<int>(header->caplen));
 
-            // Timestamp ──────────────────────────────────────────────────────
             QDateTime dt = QDateTime::fromSecsSinceEpoch(header->ts.tv_sec);
+            pkt.timestamp_s  = header->ts.tv_sec;
+            pkt.timestamp_us = header->ts.tv_usec;
             pkt.timestamp = dt.toString("hh:mm:ss.") +
                             QString::number(header->ts.tv_usec / 1000)
                                 .rightJustified(3, '0');
 
-            // Ethernet layer ─────────────────────────────────────────────────
             if (header->caplen >= sizeof(EthernetHeader)) {
                 const auto *eth = reinterpret_cast<const EthernetHeader*>(data);
                 uint16_t etType = ntohs(eth->etherType);
@@ -165,7 +163,6 @@ void PacketCapture::run() {
                 pkt.etherType = etType;
 
                 if (etType == 0x0800) {
-                    // ── IPv4 ────────────────────────────────────────────────
                     uint32_t ethLen = sizeof(EthernetHeader);
                     if (header->caplen >= ethLen + sizeof(IpHeader)) {
                         const auto *ip = reinterpret_cast<const IpHeader*>(
@@ -182,7 +179,7 @@ void PacketCapture::run() {
                         uint32_t ipEnd = ethLen + pkt.ipHeaderLen;
 
                         switch (ip->protocol) {
-                        case 1: { // ICMP
+                        case 1: {
                             pkt.protocol = "ICMP";
                             if (header->caplen >= ipEnd + sizeof(IcmpHeader)) {
                                 const auto *icmp = reinterpret_cast<const IcmpHeader*>(
@@ -192,7 +189,7 @@ void PacketCapture::run() {
                             }
                             break;
                         }
-                        case 6: { // TCP
+                        case 6: {
                             pkt.protocol = "TCP";
                             if (header->caplen >= ipEnd + sizeof(TcpHeader)) {
                                 const auto *tcp = reinterpret_cast<const TcpHeader*>(
@@ -207,7 +204,7 @@ void PacketCapture::run() {
                             }
                             break;
                         }
-                        case 17: { // UDP
+                        case 17: {
                             pkt.protocol = "UDP";
                             if (header->caplen >= ipEnd + sizeof(UdpHeader)) {
                                 const auto *udp = reinterpret_cast<const UdpHeader*>(
@@ -249,9 +246,34 @@ void PacketCapture::run() {
                 QString("Capture error: %1").arg(pcap_geterr(handle)));
             break;
         }
-        // result == 0 → timeout, loop again
     }
 
     pcap_close(handle);
     handle = nullptr;
+}
+
+bool PacketCapture::savePackets(const QString &fileName, const QVector<PacketData> &packets) {
+    pcap_t *temp = pcap_open_dead(DLT_EN10MB, 65536);
+    if (!temp) return false;
+
+    pcap_dumper_t *dumper = pcap_dump_open(temp, fileName.toLocal8Bit().constData());
+    if (!dumper) {
+        pcap_close(temp);
+        return false;
+    }
+
+    for (const auto &pkt : packets) {
+        struct pcap_pkthdr h;
+        h.ts.tv_sec  = pkt.timestamp_s;
+        h.ts.tv_usec = pkt.timestamp_us;
+        h.caplen     = static_cast<uint32_t>(pkt.rawData.size());
+        h.len        = pkt.length;
+
+        pcap_dump(reinterpret_cast<u_char*>(dumper), &h, 
+                  reinterpret_cast<const u_char*>(pkt.rawData.constData()));
+    }
+
+    pcap_dump_close(dumper);
+    pcap_close(temp);
+    return true;
 }

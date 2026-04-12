@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "services/FilterEngine.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -8,10 +9,6 @@
 #include <QFont>
 #include <QColor>
 #include <QFrame>
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Constructor
-// ─────────────────────────────────────────────────────────────────────────────
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     setupUi();
@@ -24,15 +21,10 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
             this, &MainWindow::onCaptureError);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  UI setup
-// ─────────────────────────────────────────────────────────────────────────────
-
 void MainWindow::setupUi() {
     setWindowTitle("Wireshark Clone");
     resize(1280, 800);
 
-    // ── Application-wide dark stylesheet ────────────────────────────────────
     setStyleSheet(R"(
         QMainWindow, QWidget {
             background-color: #1e1e2e;
@@ -123,16 +115,51 @@ void MainWindow::setupUi() {
             min-height: 20px;
         }
         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+        
+        QLineEdit#filterEdit {
+            background-color: #11111b;
+            color: #cdd6f4;
+            border: 1px solid #45475a;
+            border-radius: 4px;
+            padding: 5px 10px;
+            font-family: 'Consolas', monospace;
+            font-size: 14px;
+        }
+        QLineEdit#filterEdit[valid="true"] {
+            border-bottom: 2px solid #a6e3a1;
+        }
+        QLineEdit#filterEdit[valid="false"] {
+            border-bottom: 2px solid #f38ba8;
+        }
     )");
 
-    // ── Central widget & root layout ─────────────────────────────────────────
     QWidget    *central    = new QWidget(this);
     QVBoxLayout *rootLayout = new QVBoxLayout(central);
     rootLayout->setContentsMargins(8, 8, 8, 8);
     rootLayout->setSpacing(6);
     setCentralWidget(central);
 
-    // ── Toolbar row ──────────────────────────────────────────────────────────
+    menuBar = new QMenuBar(this);
+    setMenuBar(menuBar);
+
+    fileMenu = menuBar->addMenu("&File");
+    
+    openAction = new QAction("📂 &Open Capture...", this);
+    openAction->setShortcut(QKeySequence::Open);
+    connect(openAction, &QAction::triggered, this, &MainWindow::onOpenCapture);
+    
+    saveAction = new QAction("💾 &Save Capture...", this);
+    saveAction->setShortcut(QKeySequence::Save);
+    connect(saveAction, &QAction::triggered, this, &MainWindow::onSaveCapture);
+
+    fileMenu->addAction(openAction);
+    fileMenu->addAction(saveAction);
+    fileMenu->addSeparator();
+    
+    QAction *exitAction = new QAction("❌ E&xit", this);
+    connect(exitAction, &QAction::triggered, this, &QWidget::close);
+    fileMenu->addAction(exitAction);
+
     QHBoxLayout *toolBar = new QHBoxLayout();
     toolBar->setSpacing(8);
 
@@ -155,15 +182,29 @@ void MainWindow::setupUi() {
 
     rootLayout->addLayout(toolBar);
 
-    // ── Three-pane vertical splitter ─────────────────────────────────────────
+    QHBoxLayout *filterBar = new QHBoxLayout();
+    filterBar->setSpacing(6);
+
+    filterEdit     = new QLineEdit(this);
+    applyFilterBtn = new QPushButton("Apply", this);
+    clearFilterBtn = new QPushButton("Clear", this);
+
+    filterEdit->setObjectName("filterEdit");
+    filterEdit->setPlaceholderText("Enter display filter… (e.g., tcp, ip.src == 192.168.1.1)");
+    
+    filterBar->addWidget(new QLabel("Filter:", this));
+    filterBar->addWidget(filterEdit, 1);
+    filterBar->addWidget(applyFilterBtn);
+    filterBar->addWidget(clearFilterBtn);
+
+    rootLayout->addLayout(filterBar);
+
     mainSplitter = new QSplitter(Qt::Vertical, this);
     mainSplitter->setChildrenCollapsible(false);
 
-    // Pane 1: Packet list table ───────────────────────────────────────────────
     packetTable = new QTableWidget(0, 6, this);
 
-    QStringList headers = {"No.", "Time", "Source", "Destination",
-                            "Protocol", "Length"};
+    QStringList headers = {"No.", "Time", "Source", "Destination", "Protocol", "Length"};
     packetTable->setHorizontalHeaderLabels(headers);
     packetTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     packetTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
@@ -177,7 +218,6 @@ void MainWindow::setupUi() {
 
     mainSplitter->addWidget(packetTable);
 
-    // Pane 2: Packet detail tree ──────────────────────────────────────────────
     detailTree = new QTreeWidget(this);
     detailTree->setHeaderHidden(true);
     detailTree->setAlternatingRowColors(true);
@@ -186,7 +226,6 @@ void MainWindow::setupUi() {
 
     mainSplitter->addWidget(detailTree);
 
-    // Pane 3: Hex dump ────────────────────────────────────────────────────────
     hexView = new QPlainTextEdit(this);
     hexView->setReadOnly(true);
     hexView->setLineWrapMode(QPlainTextEdit::NoWrap);
@@ -198,32 +237,45 @@ void MainWindow::setupUi() {
 
     mainSplitter->addWidget(hexView);
 
-    // Initial size ratios: 50% table, 30% tree, 20% hex
     mainSplitter->setSizes({400, 240, 160});
 
     rootLayout->addWidget(mainSplitter);
 
-    // ── Connections ──────────────────────────────────────────────────────────
     connect(startBtn, &QPushButton::clicked, this, &MainWindow::onStartCapture);
     connect(stopBtn,  &QPushButton::clicked, this, &MainWindow::onStopCapture);
 
     connect(packetTable, &QTableWidget::itemSelectionChanged,
             this, &MainWindow::onPacketSelectionChanged);
 
-    // ── Populate interface list ───────────────────────────────────────────────
+    connect(applyFilterBtn, &QPushButton::clicked, this, &MainWindow::onApplyFilter);
+    connect(clearFilterBtn, &QPushButton::clicked, this, &MainWindow::onClearFilter);
+    connect(filterEdit,     &QLineEdit::returnPressed, this, &MainWindow::onApplyFilter);
+    connect(filterEdit,     &QLineEdit::textChanged,   this, &MainWindow::onFilterTextChanged);
+
     PacketCapture tempCapture;
     QStringList   devices = tempCapture.getDeviceList();
     if (devices.isEmpty()) {
         interfaceCombo->addItem("No interfaces found (run as Admin)");
         startBtn->setEnabled(false);
     } else {
-        interfaceCombo->addItems(devices);
+        for (const QString &devStr : devices) {
+            int openParen = devStr.lastIndexOf(" (");
+            if (openParen != -1) {
+                QString technicalName = devStr.left(openParen);
+                QString friendlyName  = devStr.mid(openParen + 2);
+                friendlyName.chop(1);
+                
+                if (friendlyName == "No description") {
+                    interfaceCombo->addItem(technicalName, technicalName);
+                } else {
+                    interfaceCombo->addItem(friendlyName, technicalName);
+                }
+            } else {
+                interfaceCombo->addItem(devStr, devStr);
+            }
+        }
     }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Start / Stop slots
-// ─────────────────────────────────────────────────────────────────────────────
 
 void MainWindow::onStartCapture() {
     packetTable->setRowCount(0);
@@ -231,8 +283,10 @@ void MainWindow::onStartCapture() {
     detailTree->clear();
     hexView->clear();
 
-    QString selected  = interfaceCombo->currentText();
-    QString deviceName = selected.split(" (").first();
+    QString deviceName = interfaceCombo->currentData().toString();
+    if (deviceName.isEmpty()) {
+        deviceName = interfaceCombo->currentText().split(" (").first();
+    }
 
     startBtn->setEnabled(false);
     stopBtn->setEnabled(true);
@@ -252,15 +306,17 @@ void MainWindow::onStopCapture() {
         QString("Stopped — %1 packet(s) captured.").arg(m_packets.size()));
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Packet received
-// ─────────────────────────────────────────────────────────────────────────────
-
 void MainWindow::onPacketCaptured(PacketData packet) {
     m_packets.append(packet);
 
     int row = packetTable->rowCount();
     packetTable->insertRow(row);
+    
+    QString currentFilter = filterEdit->text();
+    bool visible = FilterEngine::matches(packet, currentFilter);
+    if (!visible) {
+        packetTable->setRowHidden(row, true);
+    }
 
     auto *numItem  = new QTableWidgetItem(QString::number(packet.number));
     auto *timeItem = new QTableWidgetItem(packet.timestamp);
@@ -273,15 +329,14 @@ void MainWindow::onPacketCaptured(PacketData packet) {
     lenItem->setTextAlignment(Qt::AlignCenter);
     protoItem->setTextAlignment(Qt::AlignCenter);
 
-    // Row color by protocol
     QColor rowColor;
     const QString &pr = packet.protocol;
-    if (pr == "TCP")        rowColor = QColor("#1e3a5f");   // blue tint
-    else if (pr == "UDP")   rowColor = QColor("#1a3f2e");   // green tint
-    else if (pr == "ICMP")  rowColor = QColor("#3d2b1f");   // orange tint
-    else if (pr == "ARP")   rowColor = QColor("#2d2845");   // purple tint
-    else if (pr == "IPv6")  rowColor = QColor("#1f3040");   // steel tint
-    else                     rowColor = QColor("#252535");   // neutral
+    if (pr == "TCP")        rowColor = QColor("#1e3a5f");
+    else if (pr == "UDP")   rowColor = QColor("#1a3f2e");
+    else if (pr == "ICMP")  rowColor = QColor("#3d2b1f");
+    else if (pr == "ARP")   rowColor = QColor("#2d2845");
+    else if (pr == "IPv6")  rowColor = QColor("#1f3040");
+    else                     rowColor = QColor("#252535");
 
     for (auto *item : {numItem, timeItem, srcItem, dstItem, protoItem, lenItem}) {
         item->setBackground(rowColor);
@@ -297,10 +352,6 @@ void MainWindow::onPacketCaptured(PacketData packet) {
     packetTable->scrollToBottom();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Packet selection → populate detail tree + hex view
-// ─────────────────────────────────────────────────────────────────────────────
-
 void MainWindow::onPacketSelectionChanged() {
     QList<QTableWidgetItem*> selected = packetTable->selectedItems();
     if (selected.isEmpty()) return;
@@ -312,10 +363,6 @@ void MainWindow::onPacketSelectionChanged() {
     populateDetailTree(pkt);
     populateHexView(pkt.rawData);
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Detail tree population
-// ─────────────────────────────────────────────────────────────────────────────
 
 static QTreeWidgetItem* makeSection(const QString &label) {
     auto *item = new QTreeWidgetItem();
@@ -336,7 +383,6 @@ static QTreeWidgetItem* makeField(const QString &key, const QString &value) {
 void MainWindow::populateDetailTree(const PacketData &pkt) {
     detailTree->clear();
 
-    // ── Frame section ────────────────────────────────────────────────────────
     auto *frameSection = makeSection(
         QString("Frame %1: %2 bytes on wire").arg(pkt.number).arg(pkt.length));
     frameSection->addChild(makeField("Arrival Time", pkt.timestamp));
@@ -348,7 +394,6 @@ void MainWindow::populateDetailTree(const PacketData &pkt) {
     detailTree->addTopLevelItem(frameSection);
     frameSection->setExpanded(true);
 
-    // ── Ethernet section ─────────────────────────────────────────────────────
     if (!pkt.srcMac.isEmpty()) {
         QString ethTitle = QString("Ethernet II,  Src: %1,  Dst: %2")
             .arg(pkt.srcMac, pkt.dstMac);
@@ -368,7 +413,6 @@ void MainWindow::populateDetailTree(const PacketData &pkt) {
         ethSection->setExpanded(true);
     }
 
-    // ── IPv4 section ─────────────────────────────────────────────────────────
     if (pkt.ipVersion == 4) {
         QString ipTitle = QString("Internet Protocol Version 4,  Src: %1,  Dst: %2")
             .arg(pkt.source, pkt.destination);
@@ -395,7 +439,6 @@ void MainWindow::populateDetailTree(const PacketData &pkt) {
         ipSection->setExpanded(true);
     }
 
-    // ── Transport layer ──────────────────────────────────────────────────────
     if (pkt.protocol == "TCP" && pkt.srcPort != 0) {
         QString tcpTitle = QString(
             "Transmission Control Protocol,  Src Port: %1,  Dst Port: %2")
@@ -415,7 +458,6 @@ void MainWindow::populateDetailTree(const PacketData &pkt) {
             .arg(tcpFlagsStr(pkt.tcpFlags));
         auto *flagsItem = makeField("Flags", flagsStr);
 
-        // Flag bit children
         auto addFlag = [&](const char *name, int bit) {
             bool set = (pkt.tcpFlags >> bit) & 1;
             flagsItem->addChild(
@@ -462,10 +504,6 @@ void MainWindow::populateDetailTree(const PacketData &pkt) {
     detailTree->resizeColumnToContents(0);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Hex dump pane
-// ─────────────────────────────────────────────────────────────────────────────
-
 void MainWindow::populateHexView(const QByteArray &data) {
     hexView->setPlainText(formatHexDump(data));
 }
@@ -476,22 +514,19 @@ QString MainWindow::formatHexDump(const QByteArray &data) {
     result.reserve(data.size() * 4);
 
     for (int i = 0; i < data.size(); i += bytesPerLine) {
-        // Offset column
         result += QString("%1  ").arg(i, 4, 16, QChar('0'));
 
-        // Hex bytes (two groups of 8)
         for (int j = 0; j < bytesPerLine; ++j) {
             if (i + j < data.size())
                 result += QString("%1 ").arg(
                     static_cast<uint8_t>(data[i + j]), 2, 16, QChar('0'));
             else
                 result += "   ";
-            if (j == 7) result += ' '; // mid-line gap
+            if (j == 7) result += ' ';
         }
 
         result += "  ";
 
-        // ASCII column
         for (int j = 0; j < bytesPerLine && i + j < data.size(); ++j) {
             char c = data[i + j];
             result += (c >= 0x20 && c < 0x7F) ? c : '.';
@@ -500,10 +535,6 @@ QString MainWindow::formatHexDump(const QByteArray &data) {
     }
     return result;
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  TCP flags → human readable string
-// ─────────────────────────────────────────────────────────────────────────────
 
 QString MainWindow::tcpFlagsStr(uint8_t flags) {
     QStringList parts;
@@ -516,11 +547,80 @@ QString MainWindow::tcpFlagsStr(uint8_t flags) {
     return parts.isEmpty() ? "None" : parts.join(", ");
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Error handler
-// ─────────────────────────────────────────────────────────────────────────────
-
 void MainWindow::onCaptureError(const QString &errorMsg) {
     onStopCapture();
     QMessageBox::critical(this, "Capture Error", errorMsg);
+}
+
+void MainWindow::onApplyFilter() {
+    QString filter = filterEdit->text();
+    int shownCount = 0;
+
+    for (int i = 0; i < m_packets.size(); ++i) {
+        bool matches = FilterEngine::matches(m_packets[i], filter);
+        packetTable->setRowHidden(i, !matches);
+        if (matches) shownCount++;
+    }
+
+    if (filter.isEmpty()) {
+        statusLabel->setText(QString("Displaying all %1 packets.").arg(m_packets.size()));
+    } else {
+        statusLabel->setText(QString("Filtered: %1 shown, %2 hidden (Total: %3)")
+            .arg(shownCount).arg(m_packets.size() - shownCount).arg(m_packets.size()));
+    }
+}
+
+void MainWindow::onClearFilter() {
+    filterEdit->clear();
+    onApplyFilter();
+}
+
+void MainWindow::onFilterTextChanged(const QString &text) {
+    FilterEngine::FilterResult res = FilterEngine::validate(text);
+    
+    if (res == FilterEngine::FilterResult::Valid) {
+        filterEdit->setProperty("valid", true);
+    } else if (res == FilterEngine::FilterResult::Invalid) {
+        filterEdit->setProperty("valid", false);
+    } else {
+        filterEdit->setProperty("valid", QVariant());
+    }
+    
+    filterEdit->style()->unpolish(filterEdit);
+    filterEdit->style()->polish(filterEdit);
+}
+
+void MainWindow::onOpenCapture() {
+    QString fileName = QFileDialog::getOpenFileName(this,
+        "Open PCAP Capture", "", "Capture Files (*.pcap *.pcapng);;All Files (*)");
+    
+    if (fileName.isEmpty()) return;
+
+    onStopCapture();
+    
+    packetTable->setRowCount(0);
+    m_packets.clear();
+    detailTree->clear();
+    hexView->clear();
+
+    statusLabel->setText("Reading from file: " + fileName);
+    captureEngine->openPcap(fileName);
+}
+
+void MainWindow::onSaveCapture() {
+    if (m_packets.isEmpty()) {
+        QMessageBox::information(this, "Save Capture", "No packets to save.");
+        return;
+    }
+
+    QString fileName = QFileDialog::getSaveFileName(this,
+        "Save PCAP Capture", "", "Capture Files (*.pcap);;All Files (*)");
+    
+    if (fileName.isEmpty()) return;
+
+    if (PacketCapture::savePackets(fileName, m_packets)) {
+        statusLabel->setText("Successfully saved to " + fileName);
+    } else {
+        QMessageBox::critical(this, "Save Error", "Failed to save PCAP file.");
+    }
 }

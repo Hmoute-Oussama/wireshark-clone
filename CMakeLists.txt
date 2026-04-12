@@ -8,12 +8,10 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-# Find Qt6
 find_package(Qt6 COMPONENTS Widgets REQUIRED)
 
 add_subdirectory(third_party)
 
-# Executable targets
 add_executable(WiresharkClone
     src/main.cpp
     src/MainWindow.cpp
@@ -21,6 +19,8 @@ add_executable(WiresharkClone
     src/PacketCapture.cpp
     src/PacketCapture.h
     src/PacketData.h
+    src/services/FilterEngine.cpp
+    src/services/FilterEngine.h
     src/services/capture_service.cpp
     src/services/capture_service.hpp
     src/services/filter_service.cpp
@@ -38,4 +38,3 @@ target_link_libraries(WiresharkClone
         fmt
         json
 )
-

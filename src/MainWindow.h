@@ -5,10 +5,13 @@
 #include <QPushButton>
 #include <QComboBox>
 #include <QLabel>
+#include <QMenuBar>
+#include <QFileDialog>
 #include <QSplitter>
 #include <QTreeWidget>
 #include <QPlainTextEdit>
 #include <QVector>
+#include <QLineEdit>
 #include "PacketCapture.h"
 #include "PacketData.h"
 
@@ -25,6 +28,11 @@ private slots:
     void onPacketCaptured(PacketData packet);
     void onCaptureError(const QString &errorMsg);
     void onPacketSelectionChanged();
+    void onApplyFilter();
+    void onClearFilter();
+    void onFilterTextChanged(const QString &text);
+    void onOpenCapture();
+    void onSaveCapture();
 
 private:
     void setupUi();
@@ -33,19 +41,25 @@ private:
     static QString formatHexDump(const QByteArray &data);
     static QString tcpFlagsStr(uint8_t flags);
 
-    // ── Toolbar / controls ────────────────────────────────
+    QMenuBar    *menuBar;
+    QMenu       *fileMenu;
+    QAction     *openAction;
+    QAction     *saveAction;
+
     QComboBox   *interfaceCombo;
     QPushButton *startBtn;
     QPushButton *stopBtn;
     QLabel      *statusLabel;
 
-    // ── Three-pane layout ─────────────────────────────────
+    QLineEdit   *filterEdit;
+    QPushButton *applyFilterBtn;
+    QPushButton *clearFilterBtn;
+
     QSplitter    *mainSplitter;
     QTableWidget *packetTable;
     QTreeWidget  *detailTree;
     QPlainTextEdit *hexView;
 
-    // ── Capture engine + packet store ─────────────────────
     PacketCapture        *captureEngine;
     QVector<PacketData>   m_packets;
 };
