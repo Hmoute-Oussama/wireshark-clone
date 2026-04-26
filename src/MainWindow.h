@@ -4,13 +4,16 @@
 #include <QTableWidget>
 #include <QPushButton>
 #include <QComboBox>
+#include <QDialog>
+#include <QLineEdit>
 #include <QLabel>
 #include <QSplitter>
 #include <QTreeWidget>
 #include <QPlainTextEdit>
+#include <QSet>
 #include <QVector>
-#include "PacketCapture.h"
 #include "PacketData.h"
+#include "controller/packet_controller.hpp"
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -25,9 +28,13 @@ private slots:
     void onPacketCaptured(PacketData packet);
     void onCaptureError(const QString &errorMsg);
     void onPacketSelectionChanged();
+    void onSaveSelectedPacket();
+    void onOpenDatabaseTestDialog();
+    void onTestDatabaseConnection();
 
 private:
     void setupUi();
+    void createDatabaseTestDialog();
     void populateDetailTree(const PacketData &pkt);
     void populateHexView(const QByteArray &data);
     static QString formatHexDump(const QByteArray &data);
@@ -37,6 +44,8 @@ private:
     QComboBox   *interfaceCombo;
     QPushButton *startBtn;
     QPushButton *stopBtn;
+    QPushButton *dbTestBtn;
+    QPushButton *saveToDbBtn;
     QLabel      *statusLabel;
 
     // ── Three-pane layout ─────────────────────────────────
@@ -46,6 +55,15 @@ private:
     QPlainTextEdit *hexView;
 
     // ── Capture engine + packet store ─────────────────────
-    PacketCapture        *captureEngine;
+    PacketController     *packetController;
     QVector<PacketData>   m_packets;
+    QSet<uint32_t>        m_savedPacketNumbers;
+    QDialog              *dbDialog;
+    QLineEdit            *dbHostEdit;
+    QLineEdit            *dbPortEdit;
+    QLineEdit            *dbNameEdit;
+    QLineEdit            *dbUserEdit;
+    QLineEdit            *dbPasswordEdit;
+    QLabel               *dbDriversLabel;
+    QLabel               *dbResultLabel;
 };

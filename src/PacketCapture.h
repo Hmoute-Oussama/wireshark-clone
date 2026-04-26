@@ -1,9 +1,18 @@
 #pragma once
 
 #include <QThread>
+#include <QByteArray>
 #include <QStringList>
 #include <pcap.h>
-#include "PacketData.h"
+
+struct CapturedPacket {
+    uint32_t number = 0;
+    uint32_t length = 0;
+    timeval timestamp{};
+    QByteArray rawData;
+};
+
+Q_DECLARE_METATYPE(CapturedPacket)
 
 class PacketCapture : public QThread {
     Q_OBJECT
@@ -17,7 +26,7 @@ public:
     void stopCapture();
 
 signals:
-    void packetCaptured(PacketData packet);
+    void packetCaptured(CapturedPacket packet);
     void captureError(const QString &errorMsg);
 
 protected:

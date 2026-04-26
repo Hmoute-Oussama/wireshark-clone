@@ -2,6 +2,7 @@
 
 #include <QString>
 #include <QByteArray>
+#include <QMetaType>
 #include <cstdint>
 
 struct PacketData {
@@ -44,3 +45,5 @@ struct PacketData {
     uint8_t icmpType = 0;
     uint8_t icmpCode = 0;
 };
+
+Q_DECLARE_METATYPE(PacketData)

@@ -8,19 +8,29 @@
 #include <QFont>
 #include <QColor>
 #include <QFrame>
+#include <QFormLayout>
+#include <QDialogButtonBox>
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Constructor
 // ─────────────────────────────────────────────────────────────────────────────
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
+    packetController = new PacketController(this);
+    dbDialog = nullptr;
+    dbHostEdit = nullptr;
+    dbPortEdit = nullptr;
+    dbNameEdit = nullptr;
+    dbUserEdit = nullptr;
+    dbPasswordEdit = nullptr;
+    dbDriversLabel = nullptr;
+    dbResultLabel = nullptr;
     setupUi();
+    createDatabaseTestDialog();
 
-    captureEngine = new PacketCapture(this);
-
-    connect(captureEngine, &PacketCapture::packetCaptured,
+    connect(packetController, &PacketController::packetCaptured,
             this, &MainWindow::onPacketCaptured);
-    connect(captureEngine, &PacketCapture::captureError,
+    connect(packetController, &PacketController::captureError,
             this, &MainWindow::onCaptureError);
 }
 
@@ -139,17 +149,24 @@ void MainWindow::setupUi() {
     interfaceCombo = new QComboBox(this);
     startBtn       = new QPushButton("▶  Start Capture", this);
     stopBtn        = new QPushButton("■  Stop Capture",  this);
+    dbTestBtn      = new QPushButton("DB Test", this);
+    saveToDbBtn    = new QPushButton("Save to DB", this);
     statusLabel    = new QLabel("Ready", this);
 
     startBtn->setObjectName("startBtn");
     stopBtn->setObjectName("stopBtn");
+    dbTestBtn->setObjectName("dbTestBtn");
+    saveToDbBtn->setObjectName("saveToDbBtn");
     statusLabel->setObjectName("statusLabel");
 
     stopBtn->setEnabled(false);
+    saveToDbBtn->setEnabled(false);
 
     toolBar->addWidget(interfaceCombo);
     toolBar->addWidget(startBtn);
     toolBar->addWidget(stopBtn);
+    toolBar->addWidget(dbTestBtn);
+    toolBar->addWidget(saveToDbBtn);
     toolBar->addStretch();
     toolBar->addWidget(statusLabel);
 
@@ -206,19 +223,73 @@ void MainWindow::setupUi() {
     // ── Connections ──────────────────────────────────────────────────────────
     connect(startBtn, &QPushButton::clicked, this, &MainWindow::onStartCapture);
     connect(stopBtn,  &QPushButton::clicked, this, &MainWindow::onStopCapture);
+    connect(dbTestBtn, &QPushButton::clicked,
+            this, &MainWindow::onOpenDatabaseTestDialog);
+    connect(saveToDbBtn, &QPushButton::clicked,
+            this, &MainWindow::onSaveSelectedPacket);
 
     connect(packetTable, &QTableWidget::itemSelectionChanged,
             this, &MainWindow::onPacketSelectionChanged);
 
     // ── Populate interface list ───────────────────────────────────────────────
-    PacketCapture tempCapture;
-    QStringList   devices = tempCapture.getDeviceList();
+    QStringList devices = packetController->getDeviceList();
     if (devices.isEmpty()) {
         interfaceCombo->addItem("No interfaces found (run as Admin)");
         startBtn->setEnabled(false);
     } else {
         interfaceCombo->addItems(devices);
     }
+}
+
+void MainWindow::createDatabaseTestDialog() {
+    dbDialog = new QDialog(this);
+    dbDialog->setWindowTitle("Database Test");
+    dbDialog->setModal(true);
+
+    auto *layout = new QVBoxLayout(dbDialog);
+    auto *formLayout = new QFormLayout();
+
+    dbHostEdit = new QLineEdit(dbDialog);
+    dbPortEdit = new QLineEdit(dbDialog);
+    dbNameEdit = new QLineEdit(dbDialog);
+    dbUserEdit = new QLineEdit(dbDialog);
+    dbPasswordEdit = new QLineEdit(dbDialog);
+    dbPasswordEdit->setEchoMode(QLineEdit::Password);
+
+    const DatabaseConfig config = packetController->databaseConfig();
+    dbHostEdit->setText(config.host);
+    dbPortEdit->setText(QString::number(config.port));
+    dbNameEdit->setText(config.databaseName);
+    dbUserEdit->setText(config.userName);
+    dbPasswordEdit->setText(config.password);
+
+    formLayout->addRow("Host", dbHostEdit);
+    formLayout->addRow("Port", dbPortEdit);
+    formLayout->addRow("Database", dbNameEdit);
+    formLayout->addRow("User", dbUserEdit);
+    formLayout->addRow("Password", dbPasswordEdit);
+    layout->addLayout(formLayout);
+
+    dbDriversLabel = new QLabel(dbDialog);
+    dbDriversLabel->setWordWrap(true);
+    dbDriversLabel->setText(
+        QString("Available Qt SQL drivers: %1")
+            .arg(packetController->availableDatabaseDrivers().join(", ")));
+    layout->addWidget(dbDriversLabel);
+
+    dbResultLabel = new QLabel("Enter settings and click Test Connection.", dbDialog);
+    dbResultLabel->setWordWrap(true);
+    layout->addWidget(dbResultLabel);
+
+    auto *buttons = new QDialogButtonBox(
+        QDialogButtonBox::Close, dbDialog);
+    auto *testButton = new QPushButton("Test Connection", dbDialog);
+    buttons->addButton(testButton, QDialogButtonBox::ActionRole);
+    layout->addWidget(buttons);
+
+    connect(testButton, &QPushButton::clicked,
+            this, &MainWindow::onTestDatabaseConnection);
+    connect(buttons, &QDialogButtonBox::rejected, dbDialog, &QDialog::close);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -228,8 +299,10 @@ void MainWindow::setupUi() {
 void MainWindow::onStartCapture() {
     packetTable->setRowCount(0);
     m_packets.clear();
+    m_savedPacketNumbers.clear();
     detailTree->clear();
     hexView->clear();
+    saveToDbBtn->setEnabled(false);
 
     QString selected  = interfaceCombo->currentText();
     QString deviceName = selected.split(" (").first();
@@ -239,14 +312,15 @@ void MainWindow::onStartCapture() {
     interfaceCombo->setEnabled(false);
     statusLabel->setText("Capturing…");
 
-    captureEngine->startCapture(deviceName);
+    packetController->startCapture(deviceName);
 }
 
 void MainWindow::onStopCapture() {
-    captureEngine->stopCapture();
+    packetController->stopCapture();
 
     startBtn->setEnabled(true);
     stopBtn->setEnabled(false);
+    saveToDbBtn->setEnabled(!packetTable->selectedItems().isEmpty());
     interfaceCombo->setEnabled(true);
     statusLabel->setText(
         QString("Stopped — %1 packet(s) captured.").arg(m_packets.size()));
@@ -303,14 +377,94 @@ void MainWindow::onPacketCaptured(PacketData packet) {
 
 void MainWindow::onPacketSelectionChanged() {
     QList<QTableWidgetItem*> selected = packetTable->selectedItems();
-    if (selected.isEmpty()) return;
+    if (selected.isEmpty()) {
+        saveToDbBtn->setEnabled(false);
+        return;
+    }
 
     int row = packetTable->row(selected.first());
-    if (row < 0 || row >= m_packets.size()) return;
+    if (row < 0 || row >= m_packets.size()) {
+        saveToDbBtn->setEnabled(false);
+        return;
+    }
 
     const PacketData &pkt = m_packets[row];
     populateDetailTree(pkt);
     populateHexView(pkt.rawData);
+    saveToDbBtn->setEnabled(true);
+}
+
+void MainWindow::onOpenDatabaseTestDialog() {
+    if (!dbDialog) {
+        return;
+    }
+
+    dbDriversLabel->setText(
+        QString("Available Qt SQL drivers: %1")
+            .arg(packetController->availableDatabaseDrivers().join(", ")));
+    dbResultLabel->setText("Enter settings and click Test Connection.");
+    dbDialog->show();
+    dbDialog->raise();
+    dbDialog->activateWindow();
+}
+
+void MainWindow::onTestDatabaseConnection() {
+    DatabaseConfig config;
+    config.host = dbHostEdit->text().trimmed();
+    config.port = dbPortEdit->text().trimmed().toInt();
+    config.databaseName = dbNameEdit->text().trimmed();
+    config.userName = dbUserEdit->text().trimmed();
+    config.password = dbPasswordEdit->text();
+
+    packetController->setDatabaseConfig(config);
+
+    QString errorMessage;
+    if (packetController->testDatabaseConnection(&errorMessage)) {
+        dbResultLabel->setText(
+            QString("Connection successful. Ready to save packets to `%1`.")
+                .arg(config.databaseName));
+        statusLabel->setText("Database connection test passed.");
+    } else {
+        dbResultLabel->setText(
+            QString("Connection failed:\n%1").arg(errorMessage));
+        statusLabel->setText("Database connection test failed.");
+    }
+}
+
+void MainWindow::onSaveSelectedPacket() {
+    QList<QTableWidgetItem*> selected = packetTable->selectedItems();
+    if (selected.isEmpty()) {
+        saveToDbBtn->setEnabled(false);
+        return;
+    }
+
+    int row = packetTable->row(selected.first());
+    if (row < 0 || row >= m_packets.size()) {
+        saveToDbBtn->setEnabled(false);
+        return;
+    }
+
+    const PacketData &pkt = m_packets[row];
+    if (m_savedPacketNumbers.contains(pkt.number)) {
+        statusLabel->setText(
+            QString("Packet %1 already saved to MySQL.").arg(pkt.number));
+        return;
+    }
+
+    QString errorMessage;
+    if (packetController->savePacket(pkt, &errorMessage)) {
+        m_savedPacketNumbers.insert(pkt.number);
+        statusLabel->setText(
+            QString("Packet %1 saved to MySQL.").arg(pkt.number));
+    } else {
+        statusLabel->setText("Packet save failed.");
+        QMessageBox::warning(
+            this,
+            "Database Save Error",
+            QString("Could not save packet %1 to MySQL.\n%2")
+                .arg(pkt.number)
+                .arg(errorMessage));
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
